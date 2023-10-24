@@ -129,6 +129,24 @@ def post_process_gpt4_response(num_prompt_instructions, response):
         instructions.append({"instruction": inst, "input": input, "output": output})
     return instructions
 
+def read_prompt_file(file_path):
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            return file.read()
+    except UnicodeDecodeError as e:
+        print(f"Error reading 'prompt.txt': {e}. Skipping the problematic characters.")
+        with open(file_path, 'rb') as file:
+            content = file.read()
+        content = content.decode('utf-8', errors='ignore')
+        return content
+
+def read_large_context(file_path, num_splits):
+    
+    context = read_prompt_file(file_path=file_path)
+    context_splits = [context[i:i + len(context) // num_splits] for i in range(0, len(context), len(context) // num_splits)]
+    random.shuffle(context_splits)      
+    return context_splits
+
 def generate_instruction_following_data(
     api_key: str,
     output_dir="./",
@@ -143,6 +161,7 @@ def generate_instruction_following_data(
     presence_penalty=0,
     top_p=0.75,
     num_cpus=16,
+    context_split=500
 ):
 
     # Load JSON data from a file
@@ -179,7 +198,9 @@ def generate_instruction_following_data(
     ]
     all_instruction_tokens = [scorer._tokenizer.tokenize(inst) for inst in all_instructions]
 
-    prompt_tmp_txt = open("./prompt.txt").read() + "\n"
+    context = read_large_context('./output.txt', context_split)
+    
+    prompt_tmp_txt = read_prompt_file("./prompt.txt") + "\n"
 
     # Initialize the OpenAI model
     model = ChatOpenAI(
@@ -203,11 +224,12 @@ def generate_instruction_following_data(
         for _ in range(request_batch_size):
             # only sampling from the seed tasks
             prompt_instructions = random.sample(seed_instruction_data, num_prompt_instructions)
+            selected_context = random.choice(context)
             prompt = encode_prompt(prompt_instructions)
-            prompt_template = PromptTemplate(template=prompt_tmp_txt, input_variables=["ins_number", "input"])
+            prompt_template = PromptTemplate(template=prompt_tmp_txt, input_variables=["ins_number", "input", "selected_context"])
             llm_chain = LLMChain(prompt=prompt_template, llm=model)
             # Single input example
-            result = llm_chain.predict(ins_number=num_prompt_instructions, input=prompt)
+            result = llm_chain.predict(ins_number=num_prompt_instructions, input=prompt, selected_context=selected_context)
             results.append(result)
 
         request_duration = time.time() - request_start
@@ -248,7 +270,7 @@ def generate_instruction_following_data(
         jdump(machine_instruction_data, os.path.join(output_dir, "regen3.json"))
         
         
-openai.api_key ='insert-api-key-here'
+openai.api_key ='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'
 os.environ['OPENAI_API_KEY'] = openai.api_key
 
 generate_instruction_following_data(
