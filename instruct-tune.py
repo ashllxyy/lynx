@@ -281,7 +281,7 @@ def generate_instruction_following_data(
         jdump(machine_instruction_data, os.path.join(output_dir, "regen3.json"))
         
         
-openai.api_key ='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'
+openai.api_key ='INSERT-KEY-HERE'
 os.environ['OPENAI_API_KEY'] = openai.api_key
 
 generate_instruction_following_data(
