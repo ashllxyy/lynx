@@ -1,9 +1,9 @@
-
 import json
 import pandas as pd
+import codecs
 
-
-df = pd.DataFrame(pd.read_csv('./seedtasks.csv'))
+with codecs.open('./new_seeds.csv', 'r', encoding='utf-8', errors='replace') as file:
+    df = pd.read_csv(file)
 
 def transform_dataframe(df):
     # Initialize an empty list to store the dictionaries
@@ -28,5 +28,5 @@ def transform_dataframe(df):
 json_list = transform_dataframe(df)
 
 # Save the JSON to a file
-with open('./seed_tasks.json', 'w') as f:
+with open('./new_seeds.json', 'w') as f:
     json.dump(json_list, f)

@@ -1,4 +1,3 @@
-
 import time
 import json
 import os
@@ -94,7 +93,7 @@ def post_process_gpt4_response(num_prompt_instructions, response):
         # filter out too short or too long instructions
         if len(inst.split()) <= 3 or len(inst.split()) > 150:
             continue
-        # filter based on keywords that are not suitable for language models.
+        # filter based on keywords.
         blacklist = [
             "image",
             "images",
@@ -144,7 +143,6 @@ def read_large_context(file_path, num_splits):
     
     context = read_prompt_file(file_path=file_path)
     context_splits = [context[i:i + len(context) // num_splits] for i in range(0, len(context), len(context) // num_splits)]
-    random.shuffle(context_splits)      
     return context_splits
 
 def generate_instruction_following_data(
@@ -161,14 +159,14 @@ def generate_instruction_following_data(
     presence_penalty=0,
     top_p=0.75,
     num_cpus=16,
-    context_split=500
+    context_split=1800
 ):
-
+    print("We are at the beginning of the code now!")
     # Load JSON data from a file
     with open(seed_tasks_path, 'r') as f:
         seed_tasks = json.load(f)
 
-    # Transform the data
+    # Transforms the data
         seed_instruction_data = [
             {"instruction": t["instruction"], "input": t["instances"][0]["input"], "output": t["instances"][0]["output"]}
             for t in seed_tasks
@@ -177,8 +175,8 @@ def generate_instruction_following_data(
     print(f"Loaded {len(seed_instruction_data)} human-written seed instructions")
 
     os.makedirs(output_dir, exist_ok=True)
-    request_idx = 0
-    # load the LM-generated instructions
+    request_idx = 390 #38 # 37 # 9 # 8 # 2 # 0
+    # loads the LM-generated instructions
     machine_instruction_data = []
     if os.path.exists(os.path.join(output_dir, "regen3.json")):
         machine_instruction_data = jload(os.path.join(output_dir, "regen3.json"))
@@ -187,12 +185,12 @@ def generate_instruction_following_data(
     # similarities = {}
     scorer = rouge_scorer.RougeScorer(["rougeL"], use_stemmer=False)
 
-    # now let's generate new instructions!
+    # generates new instructions
     progress_bar = tqdm.tqdm(total=num_instructions_to_generate)
     if machine_instruction_data:
         progress_bar.update(len(machine_instruction_data))
 
-    # first we tokenize all the seed instructions and generated machine instructions
+    # tokenizes all the seed instructions and generated machine instructions
     all_instructions = [d["instruction"] for d in seed_instruction_data] + [
         d["instruction"] for d in machine_instruction_data
     ]
@@ -202,6 +200,7 @@ def generate_instruction_following_data(
     
     prompt_tmp_txt = read_prompt_file("./prompt.txt") + "\n"
 
+    
     # Initialize the OpenAI model
     model = ChatOpenAI(
         openai_api_key=api_key,
@@ -213,23 +212,40 @@ def generate_instruction_following_data(
         top_p=top_p,
         request_timeout=180
     )
-
-    evidence_prompt_instruction = ''
+    print(f'This is the request idx {request_idx}')
 
     while len(machine_instruction_data) < num_instructions_to_generate:
         request_idx += 1
-
+        
+        # print(f'This is the request idx {request_idx}')
+        # break
+    
         results = []
         request_start = time.time()
         for _ in range(request_batch_size):
-            # only sampling from the seed tasks
+            #  sampling from the seed tasks and the random context
             prompt_instructions = random.sample(seed_instruction_data, num_prompt_instructions)
-            selected_context = random.choice(context)
+            selected_context = context[request_idx-1]
+                        
             prompt = encode_prompt(prompt_instructions)
             prompt_template = PromptTemplate(template=prompt_tmp_txt, input_variables=["ins_number", "input", "selected_context"])
-            llm_chain = LLMChain(prompt=prompt_template, llm=model)
-            # Single input example
-            result = llm_chain.predict(ins_number=num_prompt_instructions, input=prompt, selected_context=selected_context)
+            try:
+                llm_chain = LLMChain(prompt=prompt_template, llm=model)
+            except:
+                print('Sleeping for 10 seconds...')
+                time.sleep(10)
+                llm_chain = LLMChain(prompt=prompt_template, llm=model)
+
+            # Sleeps when timeout
+            try:
+                result = llm_chain.predict(ins_number=num_prompt_instructions, input=prompt, selected_context=selected_context)
+            except:
+                time.sleep(10)
+                print('Sleeping for 10 seconds...')
+                print('Skipping')
+                continue
+                result = llm_chain.predict(ins_number=num_prompt_instructions, input=prompt, selected_context=selected_context)
+           
             results.append(result)
 
         request_duration = time.time() - request_start
@@ -237,51 +253,46 @@ def generate_instruction_following_data(
         process_start = time.time()
         instruction_data = []
         for result in results:
-            new_instructions = post_process_gpt4_response(num_prompt_instructions, result)
-            instruction_data += new_instructions
+            try:
+                new_instructions = post_process_gpt4_response(num_prompt_instructions, result)
+                instruction_data += new_instructions
+            except(UnicodeEncodeError):
+                instruction_data += new_instructions
+                continue
+            
 
         total = len(instruction_data)
+        print(f"We have reached here and the total instructions thus far is {total}")
         keep = 0
         for instruction_data_entry in instruction_data:
-            # computing similarity with the pre-tokenzied instructions
-            new_instruction_tokens = scorer._tokenizer.tokenize(instruction_data_entry["instruction"])
-            with Pool(num_cpus) as p:
-                rouge_scores = p.map(
-                    partial(rouge_scorer._score_lcs, new_instruction_tokens),
-                    all_instruction_tokens,
-                )
-            rouge_scores = [score.fmeasure for score in rouge_scores]
-            most_similar_instructions = {
-                all_instructions[i]: rouge_scores[i] for i in np.argsort(rouge_scores)[-10:][::-1]
-            }
-            if max(rouge_scores) > 0.7:
-                continue
-            else:
-                keep += 1
-            instruction_data_entry["most_similar_instructions"] = most_similar_instructions
-            instruction_data_entry["avg_similarity_score"] = float(np.mean(rouge_scores))
+            print("I have entered the for loop for instruction_data_entry!")
+            new_instruction_tokens = scorer._tokenizer.tokenize(instruction_data_entry["instruction"])            
+            print("Added this instruction data entry")
+            keep += 1
             machine_instruction_data.append(instruction_data_entry)
             all_instructions.append(instruction_data_entry["instruction"])
             all_instruction_tokens.append(new_instruction_tokens)
             progress_bar.update(1)
+            
+        print(f"I have come out of the for loop and I have kept {keep}")
         process_duration = time.time() - process_start
         print(f"Request {request_idx} took {request_duration:.2f}s, processing took {process_duration:.2f}s")
         print(f"Generated {total} instructions, kept {keep} instructions")
         jdump(machine_instruction_data, os.path.join(output_dir, "regen3.json"))
         
         
-openai.api_key ='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'
+openai.api_key ='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'
 os.environ['OPENAI_API_KEY'] = openai.api_key
 
 generate_instruction_following_data(
     api_key=openai.api_key,
     output_dir="./new_tasks",
     seed_tasks_path="./seed_tasks.json",
-    num_instructions_to_generate=15,
-    model_name="gpt-4",
+    num_instructions_to_generate=10000, ###
+    model_name="gpt-3.5-turbo",
     num_prompt_instructions=3,
-    request_batch_size=5,
+    request_batch_size=1, ###
     temperature=0,
     top_p=1.0,
-    num_cpus=4,
+    num_cpus=1
 )
